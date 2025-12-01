@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatTorrent P2P WebRTC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0d1117; color: #c9d1d9; }
+        .card { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+        .room-item { cursor: pointer; padding: 10px; border-bottom: 1px solid #30363d; transition: background-color 0.2s; }
+        .room-item:hover { background-color: #21262d; }
+        .chat-container { height: 60vh; max-height: 600px; }
+        .message-bubble { max-width: 80%; padding: 8px 12px; border-radius: 12px; margin-bottom: 8px; }
+        .sender { background-color: #238636; margin-left: auto; }
+        .receiver { background-color: #30363d; margin-right: auto; }
+        .file-data { color: #f0f6fc; font-weight: bold; }
+        .sdp-viewer { font-family: monospace; font-size: 10px; white-space: pre-wrap; word-break: break-all; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container mx-auto p-4 max-w-6xl flex space-x-4">
+        
+        <!-- Panel Izquierdo: Salas y Conexión -->
+        <div id="sidebar" class="w-1/3 card p-4 space-y-4">
+            <h1 class="2xl font-bold text-teal-400">Salas P2P</h1>
+
+            <div id="connection-status" class="text-sm font-bold p-2 rounded text-center bg-yellow-600/30 text-yellow-300">
+                Estado: Desconectado.
+            </div>
+
+            <!-- Controles de Sala -->
+            <div class="space-y-2">
+                <h3 class="font-medium text-lg">Crear / Importar</h3>
+                <input type="text" id="room-name-input" placeholder="Nombre de la nueva sala" class="w-full p-2 bg-[#0D1117] border border-[#30363D] rounded text-sm focus:outline-none">
+                <button onclick="createRoomAndOffer(true)" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded transition">
+                    1. Crear Sala & Exportar .torrent
+                </button>
+                <input type="file" id="import-file-input" class="hidden" onchange="importRoomFile(this.files[0])" accept=".torrent,.json">
+                <button onclick="document.getElementById('import-file-input').click()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition">
+                    2. Importar Archivo .torrent
+                </button>
+            </div>
+
+            <h3 class="font-medium text-lg mt-4">Salas Disponibles</h3>
+            <div id="rooms-list" class="space-y-1 max-h-48 overflow-y-auto">
+                <!-- Salas generadas aquí -->
+                <div id="no-rooms" class="text-sm text-gray-500 p-2">No hay salas activas.</div>
+            </div>
+
+            <!-- Área de intercambio SDP para debugging (oculto) -->
+            <div id="sdp-area" class="mt-4 hidden">
+                <h3 class="font-medium text-sm text-red-400">SDP (Solo Debug)</h3>
+                <textarea id="sdp-output" rows="3" class="w-full p-2 bg-[#0D1117] border border-[#30363D] rounded resize-none text-xs sdp-viewer"></textarea>
+                <button onclick="copyToClipboard(document.getElementById('sdp-output').value)" class="w-full bg-gray-500 text-white py-1 text-xs rounded mt-1">Copiar SDP</button>
+            </div>
+        </div>
+        
+        <!-- Panel Derecho: Chat y Transferencia -->
+        <div id="chat-panel" class="w-2/3 card p-4 opacity-30 pointer-events-none">
+            <h2 id="chat-title" class="text-xl font-semibold mb-3 text-teal-300">Seleccione una Sala</h2>
+
+            <div id="connection-controls" class="space-y-2 mb-4 hidden">
+                <button id="export-torrent-button" onclick="exportTorrentFile()" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded transition">
+                    Exportar Archivo .torrent (Llave)
+                </button>
+                <button id="export-history-button" onclick="exportHistoryFile()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded transition">
+                    Exportar Historial (JSON)
+                </button>
+            </div>
+
+            <div id="messages" class="chat-container overflow-y-auto p-3 mb-4 bg-[#0D1117] rounded">
+                <!-- Mensajes aquí -->
+            </div>
+
+            <!-- Área de Input -->
+            <div class="flex space-x-2">
+                <input type="file" id="file-input" class="hidden" onchange="sendFile(this.files[0], 'file')">
+                <button onclick="document.getElementById('file-input').click()" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-3 rounded-md transition" title="Compartir Archivo (Chunks)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9l-3 3 3 3"></path><path d="M14 15l3-3-3-3"></path></svg>
+                </button>
+                
+                <button id="record-button" onclick="toggleRecording()" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded-md transition" title="Grabar Audio">
+                    <svg id="mic-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+                    <span id="record-status" class="hidden">00:00</span>
+                </button>
+
+                <input type="text" id="message-input" placeholder="Escribe un mensaje (P2P)..." class="flex-grow p-2 bg-[#0D1117] border border-[#30363D] rounded text-sm focus:outline-none">
+                <button onclick="sendMessage()" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-md transition">
+                    Enviar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // WebRTC Global State
+        let peerConnection;
+        let dataChannel;
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        };
+        const CHUNK_SIZE = 16384; // 16KB per chunk (Simulating BitTorrent chunking)
+        let receivedFile = {};
+        const rooms = {}; // Almacena información de las salas: {roomId: {name, sdp, peerConnected, pc, history: []}}
+        let currentRoomId = null;
+        let localSdpForExport = null; 
+        
+        // Audio Recording State
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        let recordingStartTime;
+        let recordingInterval;
+
+
+        // --- Audio Recording Logic ---
+
+        async function toggleRecording() {
+            const button = document.getElementById('record-button');
+            const micIcon = document.getElementById('mic-icon');
+            const statusSpan = document.getElementById('record-status');
+
+            if (isRecording) {
+                // Detener grabación
+                mediaRecorder.stop();
+                clearInterval(recordingInterval);
+                isRecording = false;
+                
+                button.classList.remove('bg-red-900', 'animate-pulse');
+                button.classList.add('bg-red-600');
+                micIcon.classList.remove('hidden');
+                statusSpan.classList.add('hidden');
+                
+                updateStatus('Grabación detenida. Enviando audio...', 'bg-yellow-600/30 text-yellow-300');
+            } else {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        // El nombre del archivo aquí es solo para referencia en la transferencia.
+                        const audioFile = new File([audioBlob], `audio_${Date.now()}.webm`, { type: 'audio/webm' });
+                        sendFile(audioFile, 'audio');
+                    };
+
+                    // Iniciar grabación
+                    mediaRecorder.start(1000); // 1 chunk por segundo
+                    isRecording = true;
+                    recordingStartTime = Date.now();
+                    
+                    button.classList.remove('bg-red-600');
+                    button.classList.add('bg-red-900', 'animate-pulse');
+                    micIcon.classList.add('hidden');
+                    statusSpan.classList.remove('hidden');
+
+                    recordingInterval = setInterval(updateRecordingTime, 1000);
+
+                    updateStatus('Grabando audio...', 'bg-red-600/30 text-red-300');
+                } catch (err) {
+                    console.error('Error al acceder al micrófono:', err);
+                    updateStatus('Error: Permiso de micrófono denegado.', 'bg-red-600/30 text-red-300');
+                }
+            }
+        }
+
+        function updateRecordingTime() {
+            const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+            const minutes = String(Math.floor(elapsed / 60)).padStart(2, '0');
+            const seconds = String(elapsed % 60).padStart(2, '0');
+            const statusSpan = document.getElementById('record-status');
+            if(statusSpan) statusSpan.textContent = `${minutes}:${seconds}`;
+        }
+
+
+        // --- Persistencia (LocalStorage) ---
+
+        function saveHistory(roomId, history) {
+            localStorage.setItem(`chatTorrent_history_${roomId}`, JSON.stringify(history));
+        }
+
+        function loadHistory(roomId) {
+            const historyString = localStorage.getItem(`chatTorrent_history_${roomId}`);
+            return historyString ? JSON.parse(historyString) : [];
+        }
+
+        function addMessageToHistory(roomId, message) {
+            if (!rooms[roomId]) return;
+            
+            // La lógica de historial es APPEND-ONLY (solo anexar)
+            const messageData = {
+                isSender: message.isSender,
+                content: message.content,
+                type: message.type || 'text',
+                timestamp: new Date().toISOString()
+            };
+
+            if (!rooms[roomId].history) {
+                rooms[roomId].history = loadHistory(roomId);
+            }
+
+            rooms[roomId].history.push(messageData);
+            saveHistory(roomId, rooms[roomId].history);
+        }
+
+        // --- UI Helpers ---
+
+        function getRoomElement(roomId) {
+            return document.getElementById(`room-${roomId}`);
+        }
+
+        function updateStatus(message, color = 'bg-yellow-600/30 text-yellow-300') {
+            const statusDiv = document.getElementById('connection-status');
+            if (statusDiv) {
+                statusDiv.className = `text-sm font-bold p-2 rounded text-center ${color}`;
+                statusDiv.textContent = `Estado: ${message}`;
+            }
+        }
+        
+        function updateChatPanelState(isConnected, roomName = "Seleccione una Sala") {
+            const chatPanel = document.getElementById('chat-panel');
+            const controls = document.getElementById('connection-controls');
+            const exportButton = document.getElementById('export-torrent-button');
+            const exportHistoryButton = document.getElementById('export-history-button');
+
+            if (chatPanel) {
+                chatPanel.classList.toggle('opacity-30', !currentRoomId);
+                chatPanel.classList.toggle('pointer-events-none', !currentRoomId);
+            }
+            const chatTitle = document.getElementById('chat-title');
+            if (chatTitle) chatTitle.textContent = roomName;
+
+            // Mostrar/Ocultar controles de conexión
+            if (controls) controls.classList.remove('hidden'); 
+            
+            // Si está conectado, ocultar el botón de exportar llave torrent (ya no se necesita)
+            if (exportButton) { 
+                if (isConnected) {
+                    exportButton.classList.add('hidden');
+                } else if (currentRoomId) {
+                    const room = rooms[currentRoomId];
+                    const sdpReady = room && room.sdp && room.sdp.sdp;
+                    exportButton.classList.toggle('hidden', !sdpReady);
+                }
+            }
+
+            // El botón de historial siempre está disponible si hay una sala seleccionada
+            if (exportHistoryButton) {
+                exportHistoryButton.classList.toggle('hidden', !currentRoomId);
+            }
+        }
+
+        function appendMessage(isSender, content, type = 'text') {
+            const messagesDiv = document.getElementById('messages');
+            if (!messagesDiv) return;
+            
+            const bubble = document.createElement('div');
+            bubble.className = `message-bubble ${isSender ? 'sender' : 'receiver'}`;
+
+            if (type === 'system-info') {
+                 // Estilo para mensajes de sistema
+                 bubble.className = 'message-bubble text-center text-xs bg-[#21262d] text-gray-400';
+                 bubble.textContent = content;
+                 
+            } else if (type === 'file-meta') {
+                bubble.innerHTML = `📦 Preparando Archivo: <span class="file-data">${content.fileName}</span> (${(content.fileSize / 1024 / 1024).toFixed(2)} MB)`;
+            } else if (type === 'file-data-complete') {
+                 // Este mensaje viene solo del historial o de un archivo recién recibido
+                 
+                 const fileExtension = content.fileName.split('.').pop().toLowerCase();
+                 bubble.innerHTML = '';
+
+                 if (fileExtension === 'jpg' || fileExtension === 'jpeg' || fileExtension === 'png' || fileExtension === 'gif') {
+                     // VISTA PREVIA DE IMAGEN
+                     const img = document.createElement('img');
+                     img.src = content.url;
+                     img.className = 'max-w-full h-auto rounded-lg mb-2';
+                     img.style.maxWidth = '250px';
+                     bubble.appendChild(img);
+                     
+                     const textLink = document.createElement('a');
+                     textLink.href = content.url;
+                     textLink.download = content.fileName;
+                     textLink.textContent = `Descargar Imagen: ${content.fileName}`;
+                     textLink.className = 'text-sm text-green-400 hover:text-green-300 underline';
+                     bubble.appendChild(textLink);
+
+                 } else if (fileExtension === 'webm' || fileExtension === 'mp3') {
+                     // REPRODUCTOR DE AUDIO
+                     const audio = document.createElement('audio');
+                     audio.src = content.url;
+                     audio.controls = true;
+                     audio.className = 'w-full mb-1';
+                     bubble.appendChild(audio);
+
+                     const textInfo = document.createElement('div');
+                     textInfo.textContent = `Audio: ${content.fileName}`;
+                     textInfo.className = 'text-xs text-gray-400';
+                     bubble.appendChild(textInfo);
+
+                 } else {
+                     // ARCHIVO GENÉRICO
+                     const link = document.createElement('a');
+                     link.href = content.url;
+                     link.download = content.fileName;
+                     link.textContent = `⬇️ Descargar Archivo: ${content.fileName} (Click aquí)`;
+                     link.className = 'text-green-400 hover:text-green-300 underline';
+                     bubble.appendChild(link);
+                 }
+
+            } else if (type === 'file-data') {
+                // Mensajes de progreso durante la transferencia
+                bubble.textContent = content;
+            } else {
+                bubble.textContent = content;
+            }
+            
+            messagesDiv.appendChild(bubble);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function renderHistory(roomId) {
+            const messagesDiv = document.getElementById('messages');
+            if (!messagesDiv) return;
+            messagesDiv.innerHTML = ''; // Limpiar mensajes
+            
+            const history = rooms[roomId].history || loadHistory(roomId);
+            rooms[roomId].history = history; // Asegurar que el objeto de la sala tiene el historial cargado
+
+            history.forEach(msg => {
+                // Reconstruir mensaje para appendMessage
+                let content = msg.content;
+                if (msg.type === 'file-data-complete') {
+                    // Si el contenido es JSON (archivo completo), lo parseamos para appendMessage
+                    try {
+                        content = JSON.parse(msg.content); 
+                    } catch {
+                        // Si no se puede parsear, asumimos que ya es el objeto {fileName, url}
+                        content = msg.content;
+                    }
+                }
+                appendMessage(msg.isSender, content, msg.type);
+            });
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        // --- Room Management ---
+        
+        function renderRoomsList() {
+            const list = document.getElementById('rooms-list');
+            if (!list) return;
+            
+            list.innerHTML = '';
+            
+            const roomKeys = Object.keys(rooms);
+            
+            const noRoomsElement = document.getElementById('no-rooms');
+            if (noRoomsElement) { 
+                noRoomsElement.classList.toggle('hidden', roomKeys.length > 0);
+            }
+
+            roomKeys.forEach(roomId => {
+                const room = rooms[roomId];
+                const item = document.createElement('div');
+                item.id = `room-${roomId}`;
+                item.className = 'room-item';
+                item.innerHTML = `<div class="font-bold text-teal-300">${room.name}</div>
+                                 <div class="text-xs text-gray-500">${room.sdp.type.toUpperCase()} | Peer ${room.peerConnected ? '🔗 Conectado' : '⏳ Esperando'}</div>`;
+                item.onclick = () => selectRoom(roomId);
+                list.appendChild(item);
+            });
+
+            if (currentRoomId) {
+                const currentElement = getRoomElement(currentRoomId);
+                if (currentElement) {
+                    currentElement.classList.add('bg-[#21262d]');
+                }
+            }
+        }
+        
+        function selectRoom(roomId) {
+            if (currentRoomId) {
+                const prevElement = getRoomElement(currentRoomId);
+                if (prevElement) {
+                    prevElement.classList.remove('bg-[#21262d]');
+                }
+            }
+            currentRoomId = roomId;
+            const currentElement = getRoomElement(currentRoomId);
+            if (currentElement) {
+                currentElement.classList.add('bg-[#21262d]');
+            }
+            
+            // Cargar y renderizar historial
+            renderHistory(roomId);
+            
+            updateChatPanelState(rooms[roomId].peerConnected, rooms[roomId].name);
+            updateStatus(rooms[roomId].peerConnected ? 'Conectado a la sala.' : 'Sala seleccionada. Intercambie el archivo .torrent.', rooms[roomId].peerConnected ? 'bg-green-600/30 text-green-300' : 'bg-yellow-600/30 text-yellow-300');
+            
+            // Actualizar botón de exportación al seleccionar sala
+            const room = rooms[currentRoomId];
+            const sdpReady = room && room.sdp && room.sdp.sdp;
+            const exportButton = document.getElementById('export-torrent-button');
+            if (exportButton) {
+                exportButton.classList.toggle('hidden', !sdpReady || rooms[roomId].peerConnected);
+            }
+        }
+
+        // --- Core WebRTC Logic ---
+
+        function setupPeerConnection(isOfferer) {
+            peerConnection = new RTCPeerConnection(configuration);
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    console.log('ICE Candidate:', event.candidate.candidate);
+                } else {
+                    // ICE gathering complete
+                    localSdpForExport = peerConnection.localDescription.sdp;
+                    const sdpOutput = document.getElementById('sdp-output');
+                    if (sdpOutput) sdpOutput.value = localSdpForExport;
+                    
+                    // Actualizar la sala después de recoger los ICE candidates
+                    if (currentRoomId && rooms[currentRoomId]) {
+                        rooms[currentRoomId].sdp.sdp = localSdpForExport;
+                        renderRoomsList();
+                        updateChatPanelState(rooms[currentRoomId].peerConnected, rooms[currentRoomId].name);
+                        updateStatus(isOfferer ? 'Oferta SDP lista para exportar.' : 'Respuesta SDP lista para exportar.');
+                    }
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                const isConnected = peerConnection.iceConnectionState === 'connected';
+                if (currentRoomId && rooms[currentRoomId]) {
+                    rooms[currentRoomId].peerConnected = isConnected;
+                    renderRoomsList();
+                    updateChatPanelState(isConnected, rooms[currentRoomId].name);
+                    updateStatus(isConnected ? '¡Conexión P2P Establecida!' : 'Conexión perdida.', isConnected ? 'bg-green-600/30 text-green-300' : 'bg-red-600/30 text-red-300');
+                }
+            };
+
+            if (isOfferer) {
+                dataChannel = peerConnection.createDataChannel('chat-torrent');
+                setupDataChannel(dataChannel);
+            } else {
+                peerConnection.ondatachannel = (event) => { 
+                    dataChannel = event.channel;
+                    setupDataChannel(dataChannel);
+                };
+            }
+            
+            return peerConnection;
+        }
+
+        function setupDataChannel(channel) {
+            channel.onopen = () => {
+                console.log('Data Channel Abierto.');
+                
+                // Lógica de sincronización de historial (Solo el Peer Oferente lo envía)
+                if (currentRoomId && rooms[currentRoomId] && peerConnection.localDescription.type === 'offer') {
+                    const history = rooms[currentRoomId].history || loadHistory(currentRoomId);
+                    const syncData = JSON.stringify({ 
+                        type: 'history-sync', 
+                        history: history,
+                        roomId: currentRoomId
+                    });
+                    channel.send(syncData);
+                    appendMessage(true, 'Sincronizando historial con el Peer...', 'system-info');
+                }
+
+                updateStatus('Canal de Datos Abierto. P2P listo para chatear.', 'bg-green-600/30 text-green-300');
+                rooms[currentRoomId].peerConnected = true;
+                renderRoomsList();
+                updateChatPanelState(true, rooms[currentRoomId].name);
+            };
+
+            channel.onmessage = (event) => {
+                handleMessage(event.data);
+            };
+
+            channel.onclose = () => {
+                console.log('Data Channel Cerrado.');
+                rooms[currentRoomId].peerConnected = false;
+                renderRoomsList();
+                updateChatPanelState(false, rooms[currentRoomId].name);
+                updateStatus('Canal de Datos Cerrado.', 'bg-red-600/30 text-red-300');
+            };
+        }
+
+        // --- Room Creation/Signaling ---
+        
+        async function createRoomAndOffer(shouldExport = false) {
+            const roomName = document.getElementById('room-name-input').value || `Sala ${Object.keys(rooms).length + 1}`;
+            const roomId = Date.now().toString();
+            
+            const pc = setupPeerConnection(true);
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // Inicializar la sala con historial vacío y PC
+                rooms[roomId] = { 
+                    name: roomName, 
+                    sdp: { type: 'offer', sdp: null },
+                    peerConnected: false,
+                    pc: pc,
+                    history: []
+                };
+                renderRoomsList();
+                selectRoom(roomId);
+
+                // Esperar a que se recolecten los ICE candidates
+                pc.onicecandidate = (event) => {
+                    if (event.candidate) return;
+                    
+                    const sdp = pc.localDescription.sdp;
+                    rooms[roomId].sdp.sdp = sdp; // Actualiza el SDP final en el objeto room
+                    renderRoomsList();
+                    updateChatPanelState(rooms[roomId].peerConnected, rooms[roomId].name);
+                    
+                    if (shouldExport) {
+                        // Descargar el archivo inmediatamente
+                        exportTorrentFile(roomId, rooms[roomId]);
+                    }
+                };
+                
+            } catch (error) {
+                    alert('Error creando sala. Verifique sus permisos de red/STUN.');
+                console.error('Error creando oferta:', error);
+                updateStatus('Error creando sala.', 'bg-red-600/30 text-red-300');
+            }
+        }
+        
+        async function connectToPeer(sdpData, roomId) {
+            const room = rooms[roomId];
+
+            if (sdpData.type === 'answer' && room.sdp.type === 'offer') {
+                 // Cliente A (Oferente) recibe Respuesta
+                 await room.pc.setRemoteDescription(new RTCSessionDescription(sdpData));
+                 updateStatus('Respuesta aplicada. Esperando conexión P2P...', 'bg-yellow-600/30 text-yellow-300');
+            } else if (sdpData.type === 'offer' && room.sdp.type === 'answer') {
+                 updateStatus('Clave duplicada o fuera de secuencia. Usa la llave de Respuesta en el otro Peer.', 'bg-red-600/30 text-red-300');
+            }
+        }
+        
+        async function createAnswerFromOffer(offerData, roomName, roomId, shouldExport = false) {
+            let pc = setupPeerConnection(false);
+            
+            // Creación de sala si no existe (al importar la oferta)
+            if (!rooms[roomId]) {
+                 rooms[roomId] = { 
+                    name: roomName, 
+                    sdp: { type: 'answer', sdp: null }, 
+                    peerConnected: false, 
+                    pc: pc,
+                    history: []
+                 };
+                 renderRoomsList();
+                 selectRoom(roomId);
+            } else {
+                rooms[roomId].pc = pc;
+            }
+            
+            try {
+                await pc.setRemoteDescription(new RTCSessionDescription(offerData));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+
+                pc.onicecandidate = (event) => {
+                    if (event.candidate) return;
+                    
+                    const sdp = pc.localDescription.sdp;
+                    rooms[roomId].sdp.sdp = sdp;
+                    renderRoomsList();
+                    selectRoom(roomId);
+                    
+                    if (shouldExport) {
+                        exportTorrentFile(roomId, rooms[roomId]);
+                    }
+                };
+                
+            } catch (error) {
+                console.error('Error creando respuesta:', error);
+                updateStatus('Error creando respuesta.', 'bg-red-600/30 text-red-300');
+            }
+        }
+
+        // --- File I/O Logic ---
+        
+        function importRoomFile(file) {
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const content = JSON.parse(e.target.result);
+                    if (content.type !== 'p2p-sdp-key' || !content.sdp || !content.roomId) {
+                        return alert('Archivo .torrent inválido: No contiene la clave SDP y/o ID de Sala.');
+                    }
+                    
+                    const roomName = content.roomName || 'Sala Importada';
+                    const sdpType = content.sdp.type;
+                    const roomId = content.roomId;
+
+                    // Lógica principal de importación unificada
+                    if (sdpType === 'offer') {
+                        // CLIENTE B (Respondedor): Generar Respuesta
+                        if (!rooms[roomId]) {
+                            // Si la sala no existe, la crea y genera la respuesta inmediatamente.
+                            createAnswerFromOffer(content.sdp, roomName, roomId, true); // Genera y exporta el answer.torrent
+                        } else {
+                            // Si la sala ya existe, pero fue creada por el cliente B, la sobrescribe y genera la respuesta.
+                             selectRoom(roomId);
+                             createAnswerFromOffer(content.sdp, roomName, roomId, true);
+                        }
+
+                    } else if (sdpType === 'answer') {
+                        // CLIENTE A (Oferente): Aplicar Respuesta
+                        if (rooms[roomId] && rooms[roomId].sdp.type === 'offer') {
+                            // Sala de oferta existente: Aplicar la respuesta y conectar.
+                            selectRoom(roomId);
+                            connectToPeer(content.sdp, roomId);
+                        } else {
+                            // Sala no existe o es una sala de respuesta que recibe otra respuesta
+                            alert(`Error: Importado archivo de Respuesta (${roomName}) sin tener una Oferta activa con el ID ${roomId}.`);
+                        }
+                    } else {
+                        alert(`Archivo .torrent importado: ${roomName}. Tipo SDP desconocido: ${sdpType}.`);
+                    }
+
+                } catch (error) {
+                    alert('Error al leer el archivo. Asegúrate de que sea un JSON válido.');
+                    console.error('Error en importación:', error);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function exportTorrentFile(roomId = currentRoomId, room = rooms[currentRoomId]) {
+            if (!room) {
+                return alert('Seleccione una sala primero.');
+            }
+            if (!room.sdp.sdp) {
+                 return alert('La clave SDP aún no está lista. Espere el estado "SDP lista para exportar."');
+            }
+
+            const exportData = {
+                type: 'p2p-sdp-key',
+                roomName: room.name,
+                roomId: roomId,
+                timestamp: Date.now(),
+                sdp: room.sdp
+            };
+
+            const jsonString = JSON.stringify(exportData, null, 2);
+            const fileName = `${room.name.replace(/\s/g, '_')}_${room.sdp.type}.torrent`;
+
+            // Creación de Blob para forzar la descarga en el navegador
+            const blob = new Blob([jsonString], { type: 'application/x-bittorrent;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fileName;
+            
+            // Simular click para iniciar descarga
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            updateStatus(`Archivo ${fileName} generado y descargado.`);
+        }
+        
+        function exportHistoryFile() {
+             if (!currentRoomId || !rooms[currentRoomId]) {
+                return alert('Seleccione una sala primero para exportar su historial.');
+            }
+            
+            const history = rooms[currentRoomId].history || loadHistory(currentRoomId);
+
+            const exportData = {
+                type: 'p2p-chat-history',
+                roomName: rooms[currentRoomId].name,
+                roomId: currentRoomId,
+                exportedAt: new Date().toISOString(),
+                history: history
+            };
+
+            const jsonString = JSON.stringify(exportData, null, 2);
+            const fileName = `${rooms[currentRoomId].name.replace(/\s/g, '_')}_historial.json`;
+
+            // Creación de Blob para forzar la descarga en el navegador
+            const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fileName;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            updateStatus(`Historial de chat exportado a ${fileName}.`);
+        }
+
+
+        // --- Data Transfer (Text & File) ---
+
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value;
+            if (message && dataChannel && dataChannel.readyState === 'open') {
+                const data = JSON.stringify({ type: 'text', content: message });
+                dataChannel.send(data);
+                
+                // 1. Agregar a la UI y al Historial Local
+                const msg = { isSender: true, content: message };
+                appendMessage(true, message);
+                addMessageToHistory(currentRoomId, msg);
+
+                input.value = '';
+            } else {
+                alert('No está conectado a un peer. Intercambie el archivo .torrent primero.');
+            }
+        }
+
+        // Central function for sending File/Audio
+        function sendFile(file, fileType) {
+            if (!file || !dataChannel || dataChannel.readyState !== 'open') {
+                return alert('Primero conéctese a la sala P2P.');
+            }
+            
+            // MimeType for history logging
+            const typeMap = { 'file': 'file-data', 'audio': 'audio-data' };
+            const historyType = typeMap[fileType] || 'file-data';
+
+
+            const metadata = {
+                type: 'file-meta',
+                fileName: file.name,
+                fileSize: file.size,
+                fileType: file.type,
+                contentType: fileType, // 'file' or 'audio'
+                timestamp: Date.now()
+            };
+
+            // 1. Enviar metadatos
+            dataChannel.send(JSON.stringify(metadata));
+            appendMessage(true, metadata, 'file-meta');
+            
+            // Agregamos al historial local el registro de envío (no la data binaria)
+            addMessageToHistory(currentRoomId, { isSender: true, content: `Archivo: ${file.name}`, type: historyType });
+
+
+            // 2. Leer y enviar el archivo en chunks (Simulación Torrent)
+            const fileReader = new FileReader();
+            let offset = 0;
+
+            fileReader.onload = (event) => {
+                const chunk = event.target.result;
+                dataChannel.send(chunk);
+                offset += chunk.byteLength;
+
+                if (offset < file.size) {
+                    readNextChunk();
+                } else {
+                    // 3. Enviar señal de fin de archivo
+                    dataChannel.send(JSON.stringify({ type: 'file-end', fileName: file.name }));
+                    appendMessage(true, `Archivo '${file.name}' enviado completamente (${(file.size / 1024).toFixed(2)} KB).`, 'file-data');
+                }
+            };
+
+            fileReader.onerror = (error) => console.error('Error leyendo archivo:', error);
+
+            function readNextChunk() {
+                const chunk = file.slice(offset, offset + CHUNK_SIZE);
+                fileReader.readAsArrayBuffer(chunk);
+            }
+
+            readNextChunk();
+        }
+
+        function handleMessage(data) {
+            try {
+                const json = JSON.parse(data);
+                
+                if (json.type === 'text') {
+                    // 1. Agregar a la UI y al Historial Local
+                    appendMessage(false, json.content);
+                    addMessageToHistory(currentRoomId, { isSender: false, content: json.content });
+                } else if (json.type === 'history-sync') {
+                    // Sincronización de Historial (Solo se recibe en el Cliente B)
+                    if (json.roomId === currentRoomId) {
+                        rooms[currentRoomId].history = json.history;
+                        saveHistory(currentRoomId, rooms[currentRoomId].history);
+                        
+                        renderHistory(currentRoomId); 
+                        appendMessage(false, 'Historial sincronizado del Peer. ¡Listo para chatear!', 'system-info');
+                        updateStatus('Historial de chat recibido y sincronizado.', 'bg-green-600/30 text-green-300');
+                    }
+                } else if (json.type === 'file-meta') {
+                    receivedFile = {
+                        fileName: json.fileName,
+                        fileSize: json.fileSize,
+                        fileType: json.fileType,
+                        contentType: json.contentType, // 'file' or 'audio'
+                        dataChunks: [],
+                        receivedSize: 0
+                    };
+                    appendMessage(false, json, 'file-meta');
+                    // Solo guardamos la notificación en el historial, no la data
+                    const historyType = json.contentType === 'audio' ? 'audio-data' : 'file-data';
+                    addMessageToHistory(currentRoomId, { isSender: false, content: `Recibiendo: ${json.fileName}`, type: historyType });
+
+                    updateStatus(`Recibiendo archivo: ${json.fileName}...`, 'bg-yellow-600/30 text-yellow-300');
+                } else if (json.type === 'file-end') {
+                    const blob = new Blob(receivedFile.dataChunks, { type: receivedFile.fileType });
+                    const url = URL.createObjectURL(blob);
+                    
+                    // Crear el mensaje final de descarga
+                    const msgContent = { 
+                        fileName: receivedFile.fileName, 
+                        url: url 
+                    };
+
+                    const msg = { 
+                        isSender: false, 
+                        content: msgContent, 
+                        type: 'file-data-complete' 
+                    };
+                    
+                    appendMessage(msg.isSender, msg.content, msg.type);
+                    
+                    // Actualizar el historial con el URL del archivo para que sea descargable
+                    // Nota: Guardamos el objeto content como string JSON para evitar problemas de LocalStorage
+                    addMessageToHistory(currentRoomId, { 
+                        isSender: msg.isSender, 
+                        content: JSON.stringify(msgContent), 
+                        type: msg.type 
+                    });
+
+                    updateStatus('¡Transferencia de archivo completada!', 'bg-green-600/30 text-green-300');
+                    receivedFile = {};
+                }
+
+            } catch (e) {
+                // Si falla el JSON, asume que es un chunk binario de archivo
+                if (receivedFile.dataChunks) {
+                    receivedFile.dataChunks.push(data);
+                    receivedFile.receivedSize += data.byteLength;
+                    
+                    const progress = (receivedFile.receivedSize / receivedFile.fileSize) * 100;
+                    if (progress > 1 && progress % 5 < 0.1) {
+                         updateStatus(`Recibiendo ${receivedFile.fileName}: ${progress.toFixed(0)}%`, 'bg-yellow-600/30 text-yellow-300');
+                    }
+                } else {
+                    console.error("Mensaje binario inesperado o DataChannel no listo:", e);
+                }
+            }
+        }
+        
+        // Inicialización
+        document.addEventListener('DOMContentLoaded', () => {
+            renderRoomsList();
+            updateChatPanelState(false);
+        });
+
+    </script>
+</body>
+</html>

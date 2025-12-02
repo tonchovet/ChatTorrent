@@ -103,3 +103,5 @@ Archivos Genéricos: Transferencia de archivos de cualquier tipo, divididos en c
 Persistencia Local: El historial de la sala se mantiene en el localStorage del navegador, permitiendo a los usuarios continuar las conversaciones después de cerrar y volver a abrir la aplicación.
 
 Exportación de Historial (JSON): Se puede exportar el historial de cualquier sala a un archivo JSON para auditoría o copia de seguridad (botón "Exportar Historial (JSON)").
+
+Autor: Alberto Ghibaudo Otero
